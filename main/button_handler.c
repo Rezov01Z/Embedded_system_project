@@ -19,6 +19,7 @@ void task_button_handler(void *pvParameters) {
             case IDLE:
                 // Wait indefinitely for a press from the ISR
                 if (xSemaphoreTake(button_press_sem, portMAX_DELAY) == pdTRUE) {
+                    ESP_LOGI("SEM", "Semaphore taken by button handler");
                     state = DEBOUNCING;
                 }
                 break;
@@ -54,21 +55,29 @@ void task_button_handler(void *pvParameters) {
                 break;
 
             case DOUBLE_PRESS_WAIT:
-                // After a release, wait for a short window to see if another press occurs.
                 if (xSemaphoreTake(button_press_sem, pdMS_TO_TICKS(DOUBLE_PRESS_WINDOW_MS)) == pdTRUE) {
-                    // A second press arrived within the window! It's a double press.
-                    ESP_LOGI(TAG, "Double press detected");
-                    event_message_t msg = { .type = EVENT_DOUBLE_PRESS };
-                    xQueueSend(system_event_queue, &msg, 0);
-                    // Wait for the final release
-                    vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME_MS)); // Debounce
-                    while (gpio_get_level(BUTTON_PIN) == 0) {
-                        vTaskDelay(pdMS_TO_TICKS(10));
+                    // Semaphore given within window — verify this is a real second press
+                    vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME_MS));
+                    if (gpio_get_level(BUTTON_PIN) == 0) {
+                        // Confirmed: real second press (double press)
+                        ESP_LOGI("BUTTON", "Double press detected");
+                        event_message_t msg = { .type = EVENT_DOUBLE_PRESS };
+                        xQueueSend(system_event_queue, &msg, 0);
+                        // Wait for release before returning to IDLE
+                        while (gpio_get_level(BUTTON_PIN) == 0) {
+                            vTaskDelay(pdMS_TO_TICKS(10));
+                        }
+                        state = IDLE;
+                    } else {
+                        // Spurious semaphore (bounce) — treat as single press
+                        ESP_LOGI("BUTTON", "Spurious press ignored; treating as single press");
+                        event_message_t msg = { .type = EVENT_SINGLE_PRESS };
+                        xQueueSend(system_event_queue, &msg, 0);
+                        state = IDLE;
                     }
-                    state = IDLE;
                 } else {
-                    // The window timed out, so it was just a single press.
-                    ESP_LOGI(TAG, "Single press detected");
+                    // Hết window: single press
+                    ESP_LOGI("BUTTON", "Single press detected");
                     event_message_t msg = { .type = EVENT_SINGLE_PRESS };
                     xQueueSend(system_event_queue, &msg, 0);
                     state = IDLE;

@@ -27,9 +27,16 @@ SSD1306_t dev;
 void IRAM_ATTR button_isr_handler(void* arg) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     xSemaphoreGiveFromISR(button_press_sem, &xHigherPriorityTaskWoken);
+    // Log chỉ nên thực hiện ở task, không phải trong ISR
     if (xHigherPriorityTaskWoken) {
         portYIELD_FROM_ISR();
     }
+}
+
+void led_off_timer_callback(TimerHandle_t xTimer) {
+    ESP_LOGI("TIMER", "Timer expired, sending EVENT_MOTION_TIMEOUT");
+    event_message_t msg = { .type = EVENT_MOTION_TIMEOUT };
+    xQueueSend(system_event_queue, &msg, 0);
 }
 
 void init_hardware() {
@@ -80,6 +87,7 @@ void init_hardware() {
 
     // --- Signal that sensor hardware is ready ---
     xEventGroupSetBits(g_system_event_group, BIT_SENSORS_INIT_OK);
+    ESP_LOGI("EVENT_GROUP", "BIT_SENSORS_INIT_OK set");
 }
 
 // --- I2C and OLED initialization (called once from app_main) ---
@@ -90,6 +98,8 @@ void init_oled_i2c(void) {
     
     ssd1306_init(&dev, 128, 64);
     ESP_LOGI(TAG, "SSD1306 initialized successfully");
+    xEventGroupSetBits(g_system_event_group, BIT_OLED_INIT_OK);
+    ESP_LOGI("EVENT_GROUP", "BIT_OLED_INIT_OK set");
 }
 
 /*
@@ -167,8 +177,10 @@ void task_led_controller(void *pvParameters) {
     while (1) {
         // Wait for any event from the queue
         if (xQueueReceive(system_event_queue, &msg, portMAX_DELAY) == pdPASS) {
+            ESP_LOGI("QUEUE", "Received event: %d", msg.type);
             // --- Use Mutex to protect access to system_state ---
             if (xSemaphoreTake(g_state_mutex, portMAX_DELAY) == pdTRUE) {
+                ESP_LOGI("MUTEX", "Mutex taken by LED controller");
                 switch (msg.type) {
                     case EVENT_MOTION:
                         if (system_state.mode == SYSTEM_MODE_AUTO) {
@@ -178,6 +190,7 @@ void task_led_controller(void *pvParameters) {
                             gpio_set_level(LED_PIN, 1);
                             system_state.led_state = true;
                             xTimerReset(led_off_timer, portMAX_DELAY);
+                            ESP_LOGI("TIMER", "Resetting LED off timer");
                         }
                         break;
                     case EVENT_LIGHT:
@@ -206,12 +219,14 @@ void task_led_controller(void *pvParameters) {
                             // Timer expired, turn LED OFF
                             gpio_set_level(LED_PIN, 0);
                             system_state.led_state = false;
+                            ESP_LOGI("TIMER", "LED off timer expired, turning off LED");
                         }
                         break;
 
                     case EVENT_DOUBLE_PRESS:
                         system_state.mode = (system_state.mode == SYSTEM_MODE_AUTO) ? SYSTEM_MODE_MANUAL : SYSTEM_MODE_AUTO;
-                        // When switching to manual, ensure light is off initially
+                        ESP_LOGI("MODE", "Double press: switched to %s mode", system_state.mode == SYSTEM_MODE_AUTO ? "AUTO" : "MANUAL");
+                        // Khi chuyển sang MANUAL, tắt đèn
                         if (system_state.mode == SYSTEM_MODE_MANUAL) {
                             system_state.led_state = false;
                             gpio_set_level(LED_PIN, 0);
@@ -222,18 +237,21 @@ void task_led_controller(void *pvParameters) {
                         if (system_state.mode == SYSTEM_MODE_MANUAL) {
                             system_state.led_state = !system_state.led_state;
                             gpio_set_level(LED_PIN, system_state.led_state);
+                            ESP_LOGI("LED", "Single press: LED %s", system_state.led_state ? "ON" : "OFF");
                         }
                         break;
                     
                     case EVENT_LONG_PRESS:
                         // Notify the OLED task to enter diagnostic mode
                         xTaskNotifyGive(g_oled_task_handle);
+                        ESP_LOGI("TASK_NOTIF", "Sending notification to OLED task");
                         break;
 
                     default:
                         break;
                 }
                 xSemaphoreGive(g_state_mutex);
+                ESP_LOGI("MUTEX", "Mutex released by LED controller");
             }
         }
     }

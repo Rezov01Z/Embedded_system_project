@@ -1,4 +1,4 @@
-idf_component_register(SRCS "sensor_system.c"
+idf_component_register(SRCS "ssd1306_i2c_legacy.c" "sensor_system.c"
                               "button_handler.c" 
                               "oled_manager.c"
                               "ssd1306.c"

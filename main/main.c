@@ -4,6 +4,8 @@
 #include "freertos/event_groups.h"
 #include "freertos/timers.h"
 
+extern void led_off_timer_callback(TimerHandle_t xTimer);
+
 // --- Global Handles for FreeRTOS objects ---
 QueueHandle_t system_event_queue;
 SemaphoreHandle_t g_state_mutex;
@@ -11,12 +13,6 @@ SemaphoreHandle_t button_press_sem;
 EventGroupHandle_t g_system_event_group;
 TimerHandle_t led_off_timer;
 TaskHandle_t g_oled_task_handle = NULL; // Initialize to NULL
-
-// --- Timer Callback ---
-void led_off_timer_callback(TimerHandle_t xTimer) {
-    event_message_t msg = { .type = EVENT_MOTION_TIMEOUT };
-    xQueueSend(system_event_queue, &msg, 0);
-}
 
 void app_main() {
     // --- Create FreeRTOS Objects BEFORE creating tasks ---
